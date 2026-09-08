@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>電流計・電圧計 読み取りマスター</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            background-color: #f0fdf4;
+            background-image: radial-gradient(#dcfce7 1px, transparent 1px);
+            background-size: 20px 20px;
+            overscroll-behavior-y: none;
+        }
+
+        /* カスタムスクロールバー */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        /* キャンバスのアスペクト比維持と最大化 */
+        .canvas-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 10;
+            max-height: 60vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #meterCanvas {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 1rem;
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.05);
+            background: linear-gradient(145deg, #ffffff, #f3f4f6);
+        }
+
+        /* アニメーション関連 */
+        @keyframes popIn {
+            0% { opacity: 0; transform: scale(0.9) translateY(10px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .animate-pop-in {
+            animation: popIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-5px); }
+            40%, 80% { transform: translateX(5px); }
+        }
+        .animate-shake {
+            animation: shake 0.4s ease-in-out;
+        }
+
+        input[type="text"] {
+            font-variant-numeric: tabular-nums;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-gray-800 flex flex-col">
+
+    <header class="bg-white shadow-sm py-4 px-6 flex justify-between items-center z-10 relative">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 bg-green-500 rounded-xl flex items-center justify-center text-white shadow-lg shadow-green-200">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+            </div>
+            <h1 class="text-xl md:text-2xl font-bold text-gray-800 tracking-tight">電流計・電圧計 <span class="text-green-600">読み取りマスター</span></h1>
+        </div>
+        <div class="hidden md:flex text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full font-medium">
+            中2理科 電気分野
+        </div>
+    </header>
+
+    <main class="flex-grow container mx-auto px-4 py-6 md:py-8 flex flex-col lg:flex-row gap-6 md:gap-8 max-w-7xl">
+        
+        <!-- 左側：メーター領域 -->
+        <section class="flex-1 flex flex-col gap-4">
+            
+            <div class="bg-white p-2 rounded-2xl shadow-sm flex gap-2 w-full lg:max-w-lg mx-auto">
+                <button id="tabAmmeter" class="flex-1 py-3 px-4 rounded-xl font-bold transition-all bg-blue-500 text-white shadow-md shadow-blue-200" onclick="switchMode('A')">
+                    電流計 (A)
+                </button>
+                <button id="tabVoltmeter" class="flex-1 py-3 px-4 rounded-xl font-bold transition-all bg-gray-100 text-gray-500 hover:bg-gray-200" onclick="switchMode('V')">
+                    電圧計 (V)
+                </button>
+            </div>
+
+            <div class="bg-white rounded-3xl p-4 md:p-6 shadow-xl border border-gray-100 relative">
+                <div class="absolute top-4 left-6 bg-gray-800 text-white text-xs md:text-sm font-bold px-3 py-1 rounded-full shadow-md z-10 transition-colors" id="terminalBadge">
+                    接続: 5A 端子
+                </div>
+                
+                <div class="canvas-container w-full" id="canvasWrapper">
+                    <canvas id="meterCanvas"></canvas>
+                </div>
+
+                <div class="mt-5 flex justify-center">
+                    <label class="flex items-center cursor-pointer gap-2 bg-gray-50 hover:bg-gray-100 px-5 py-2.5 rounded-full transition-colors border border-gray-200 shadow-sm select-none">
+                        <input type="checkbox" id="toggleScaleBtn" class="w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500">
+                        <span class="text-sm font-bold text-gray-700">100刻みの数値を表示</span>
+                    </label>
+                </div>
+
+                <div class="mt-4 text-center text-sm text-gray-500 flex items-center justify-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>メーターの下部に描かれている端子を見て、どのマイナス端子に繋がっているか確認しよう！</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="w-full lg:w-[420px] flex flex-col gap-6 shrink-0">
+            
+            <div class="bg-white rounded-3xl p-6 md:p-8 shadow-xl border border-gray-100">
+                <h2 class="text-xl font-bold text-gray-800 mb-6 flex items-center gap-2">
+                    <span class="bg-blue-100 text-blue-600 w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0">Q</span>
+                    いまの値はいくつ？
+                </h2>
+                
+                <form id="answerForm" class="flex flex-col gap-4">
+                    <div class="flex flex-col gap-2">
+                        <label for="answerInput" class="block text-sm font-bold text-gray-600">目分量の1/10まで読んでね</label>
+                        <div class="flex items-center gap-2 md:gap-3">
+                            <button type="button" id="btnMinus" class="w-12 h-12 md:w-14 md:h-14 shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-3xl font-bold flex items-center justify-center transition-colors shadow-sm border border-gray-200 active:scale-95 select-none">-</button>
+                            
+                            <div class="flex-grow relative flex items-end">
+                                <input type="text" id="answerInput" inputmode="decimal" autocomplete="off" placeholder="例: 3.50" 
+                                    class="w-full text-lg md:text-2xl font-bold text-center px-1 md:px-2 py-3 rounded-xl border-2 border-gray-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all">
+                            </div>
+
+                            <button type="button" id="btnPlus" class="w-12 h-12 md:w-14 md:h-14 shrink-0 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl text-3xl font-bold flex items-center justify-center transition-colors shadow-sm border border-gray-200 active:scale-95 select-none">+</button>
+                            
+                            <div class="pb-2 text-xl md:text-2xl font-bold text-gray-500 w-8 shrink-0 text-center" id="unitDisplay">A</div>
+                        </div>
+                    </div>
+                    
+                    <button type="submit" id="submitBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold text-lg py-4 rounded-xl shadow-lg shadow-blue-200 transition-all active:scale-95 flex justify-center items-center gap-2 mt-2">
+                        答える
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                        </svg>
+                    </button>
+
+                    <!-- AIヒントエリア -->
+                    <div id="aiHintArea" class="hidden mt-1 bg-purple-50 border border-purple-100 rounded-xl p-4 relative animate-pop-in">
+                        <div class="absolute -top-3 left-4 bg-purple-100 text-purple-700 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1 shadow-sm">
+                            <span>🤖</span> 先生のヒント
+                        </div>
+                        <p id="aiHintText" class="text-sm text-gray-700 mt-2 font-medium leading-relaxed"></p>
+                    </div>
+                    <button type="button" id="getHintBtn" class="text-purple-600 text-sm font-bold flex items-center justify-center gap-1 mt-1 hover:text-purple-700 transition-colors py-2 rounded-lg hover:bg-purple-50">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        AI先生にヒントをもらう
+                    </button>
+
+                    <!-- スキップボタン -->
+                    <button type="button" id="skipBtn" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold text-md py-3 rounded-xl transition-all active:scale-95 flex justify-center items-center mt-1">
+                        答えずに次の問題へ
+                    </button>
+                </form>
+            </div>
+
+            <div id="feedbackArea" class="hidden rounded-3xl p-6 shadow-xl border-2 animate-pop-in">
+                <div class="flex items-center gap-4 mb-4">
+                    <div id="feedbackIcon" class="w-14 h-14 rounded-full flex items-center justify-center text-3xl shadow-inner shrink-0"></div>
+                    <h3 id="feedbackTitle" class="text-2xl font-bold">正解！</h3>
+                </div>
+                
+                <div class="bg-white/60 rounded-xl p-4 backdrop-blur-sm">
+                    <p id="feedbackText" class="text-gray-700 leading-relaxed font-medium"></p>
+                    <div id="correctAnswerDisplay" class="mt-3 pt-3 border-t border-gray-200 text-lg font-bold text-center"></div>
+                </div>
+
+                <button id="nextBtn" class="w-full mt-6 bg-gray-800 hover:bg-gray-900 text-white font-bold text-lg py-3 rounded-xl shadow-md transition-all active:scale-95 hidden">
+                    次の問題へ
+                </button>
+
+                <button type="button" id="openAiBtn" class="w-full mt-3 bg-purple-50 hover:bg-purple-100 border border-purple-200 text-purple-700 font-bold text-md py-3 rounded-xl shadow-sm transition-all active:scale-95 hidden flex justify-center items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                    </svg>
+                    AI先生に質問する
+                </button>
+            </div>
+
+        </section>
+    </main>
+
+    <button type="button" id="floatingAiBtn" class="fixed bottom-6 right-6 md:bottom-10 md:right-10 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-full p-4 shadow-2xl transition-transform hover:scale-110 flex items-center justify-center group z-40 border-2 border-white/20">
+        <span class="text-3xl">🤖</span>
+        <span class="max-w-0 overflow-hidden whitespace-nowrap group-hover:max-w-xs group-hover:ml-3 transition-all duration-300 ease-in-out font-bold">
+            AI先生に質問
+        </span>
+        <span class="absolute top-0 right-0 flex h-4 w-4">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-4 w-4 bg-purple-500 border-2 border-white"></span>
+        </span>
+    </button>
+
+    <div id="aiModal" class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-sm hidden opacity-0 transition-opacity duration-300">
+        <div class="bg-white w-full max-w-lg rounded-3xl shadow-2xl flex flex-col h-[80vh] m-4 transform scale-95 transition-transform duration-300" id="aiModalContent">
+            <div class="px-6 py-4 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-t-3xl flex justify-between items-center shadow-md shrink-0">
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center backdrop-blur-md">
+                        <span class="text-xl">🤖</span>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-lg tracking-wide">AI先生</h3>
+                        <p class="text-xs text-purple-100">何でも質問してね！</p>
+                    </div>
+                </div>
+                <button type="button" id="closeAiBtn" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/20 transition-colors">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                </button>
+            </div>
+            
+            <div id="chatHistory" class="flex-grow p-4 md:p-6 overflow-y-auto flex flex-col gap-4 bg-gray-50 scroll-smooth">
+                <div class="flex items-start gap-3">
+                    <div class="w-8 h-8 rounded-full bg-purple-200 flex-shrink-0 flex items-center justify-center text-sm">🤖</div>
+                    <div class="bg-white border border-purple-100 text-gray-800 p-3 rounded-2xl rounded-tl-sm shadow-sm max-w-[85%] text-sm leading-relaxed">
+                        こんにちは！理科のAI先生です。<br>
+                        電流計や電圧計の読み方で、分からないところがあれば何でも聞いてね！
+                    </div>
+                </div>
+            </div>
+
+            <div id="aiLoading" class="px-6 py-2 hidden shrink-0">
+                <div class="flex items-center gap-2 text-purple-600 text-sm font-medium">
+                    <svg class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    先生が考えています...
+                </div>
+            </div>
+            
+            <div class="p-4 bg-white border-t border-gray-100 rounded-b-3xl shrink-0">
+                <form id="aiForm" class="flex gap-2 relative">
+                    <input type="text" id="aiInput" class="flex-grow border border-gray-300 rounded-xl px-4 py-3 text-sm focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none transition-all" placeholder="メッセージを入力...">
+                    <button type="submit" id="aiSendBtn" class="bg-purple-600 hover:bg-purple-700 text-white p-3 rounded-xl shadow-md transition-colors active:scale-95 flex items-center justify-center shrink-0 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                        </svg>
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 【重要】デプロイ時にご自身のGemini APIキーを設定してください。
+        // 空文字のままだと安全装置が働き、ダミーメッセージが表示されます。
+        const GEMINI_API_KEY = ""; 
+
+        // --- アプリケーションの状態 ---
+        const state = {
+            mode: 'A', // 'A': 電流計, 'V': 電圧計
+            terminal: '', // '5A', '500mA', '50mA', '300V', '15V', '3V'
+            value: 0, // 0.0 〜 maxTicks (区画単位の位置)
+            correctAnswer: "", // 正解の文字列
+            unit: "", // A, mA, V
+            
+            // アニメーション用
+            currentNeedlePos: 0, 
+            targetNeedlePos: 0,
+            animationFrameId: null,
+
+            // メーター設定
+            ammeterTicks: 50, // 50区画
+            voltmeterTicks: 30, // 30区画
+            
+            isAnswered: false,
+            showHundredScale: false 
+        };
+
+        const terminals = {
+            'A': ['5A', '500mA', '50mA'],
+            'V': ['300V', '15V', '3V']
+        };
+
+        // --- DOM要素 ---
+        const ui = {
+            tabA: document.getElementById('tabAmmeter'),
+            tabV: document.getElementById('tabVoltmeter'),
+            badge: document.getElementById('terminalBadge'),
+            canvas: document.getElementById('meterCanvas'),
+            wrapper: document.getElementById('canvasWrapper'),
+            form: document.getElementById('answerForm'),
+            input: document.getElementById('answerInput'),
+            unit: document.getElementById('unitDisplay'),
+            submitBtn: document.getElementById('submitBtn'),
+            skipBtn: document.getElementById('skipBtn'),
+            btnMinus: document.getElementById('btnMinus'),
+            btnPlus: document.getElementById('btnPlus'),
+            feedback: document.getElementById('feedbackArea'),
+            feedbackIcon: document.getElementById('feedbackIcon'),
+            feedbackTitle: document.getElementById('feedbackTitle'),
+            feedbackText: document.getElementById('feedbackText'),
+            correctAnswerDisplay: document.getElementById('correctAnswerDisplay'),
+            nextBtn: document.getElementById('nextBtn'),
+            toggleScaleBtn: document.getElementById('toggleScaleBtn'),
+            
+            openAiBtn: document.getElementById('openAiBtn'),
+            aiModal: document.getElementById('aiModal'),
+            aiModalContent: document.getElementById('aiModalContent'),
+            closeAiBtn: document.getElementById('closeAiBtn'),
+            chatHistory: document.getElementById('chatHistory'),
+            aiForm: document.getElementById('aiForm'),
+            aiInput: document.getElementById('aiInput'),
+            aiSendBtn: document.getElementById('aiSendBtn'),
+            aiLoading: document.getElementById('aiLoading'),
+            
+            floatingAiBtn: document.getElementById('floatingAiBtn'),
+            getHintBtn: document.getElementById('getHintBtn'),
+            aiHintArea: document.getElementById('aiHintArea'),
+            aiHintText: document.getElementById('aiHintText')
+        };
+
+        const ctx = ui.canvas.getContext('2d');
+        let aiChatHistory = [];
+        const systemPrompt = "あなたは親切で分かりやすい中学校の理科の先生「AI先生」です。中2の生徒に電流計・電圧計の読み方を教えています。生徒が分からないところを優しく、時には励ましながら答えてください。専門用語は中学生向けに噛み砕いて説明し、回答はチャット形式で読みやすく簡潔に（2〜4文程度）してください。絵文字も適度に使って親しみやすくしてください。";
+
+        // --- 初期化 ---
+        function init() {
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas(); 
+            
+            ui.form.addEventListener('submit', (e) => {
+                e.preventDefault();
+                if(!state.isAnswered) checkAnswer();
+            });
+
+            ui.btnMinus.addEventListener('click', () => incrementValue(-1));
+            ui.btnPlus.addEventListener('click', () => incrementValue(1));
+
+            ui.skipBtn.addEventListener('click', generateQuestion);
+            ui.nextBtn.addEventListener('click', generateQuestion);
+
+            ui.toggleScaleBtn.addEventListener('change', (e) => {
+                state.showHundredScale = e.target.checked;
+                drawMeter();
+            });
+
+            ui.openAiBtn.addEventListener('click', openAiModal);
+            ui.closeAiBtn.addEventListener('click', closeAiModal);
+            ui.aiModal.addEventListener('click', (e) => {
+                if(e.target === ui.aiModal) closeAiModal();
+            });
+            ui.aiForm.addEventListener('submit', handleAiSubmit);
+
+            ui.floatingAiBtn.addEventListener('click', openAiModal);
+            ui.getHintBtn.addEventListener('click', getAiHint);
+
+            generateQuestion();
+            animate();
+        }
+
+        function resizeCanvas() {
+            const rect = ui.wrapper.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            ui.canvas.width = rect.width * dpr;
+            ui.canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+            drawMeter();
+        }
+
+        // --- 描画ロジック ---
+        function drawMeter() {
+            const w = ui.canvas.width / (window.devicePixelRatio || 1);
+            const h = ui.canvas.height / (window.devicePixelRatio || 1);
+            
+            ctx.clearRect(0, 0, w, h);
+
+            // 描画領域の最適化（メーター中心を少し上に上げ、半径を調整して下のスペースを確保）
+            const cx = w / 2;
+            const cy = h * 0.76; 
+            const radius = Math.min(w * 0.44, h * 0.63); 
+            
+            const startAngle = Math.PI * 1.12; 
+            const endAngle = Math.PI * 1.88; 
+
+            drawBackground(w, h);
+            drawTerminals(w, h, cx, cy, radius);
+            drawScale(cx, cy, radius, startAngle, endAngle);
+            drawNeedle(cx, cy, radius, startAngle, endAngle);
+            drawCover(cx, cy, radius);
+        }
+
+        function drawBackground(w, h) {
+            ctx.fillStyle = '#ffffff';
+            ctx.beginPath();
+            // 枠をキャンバスのギリギリまで広げて表示領域を最大化
+            ctx.roundRect(w*0.015, h*0.015, w*0.97, h*0.97, 15);
+            ctx.fill();
+            
+            ctx.strokeStyle = '#e5e7eb';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        function drawScale(cx, cy, radius, startAngle, endAngle) {
+            const maxTicks = state.mode === 'A' ? state.ammeterTicks : state.voltmeterTicks;
+            
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, startAngle, endAngle);
+            ctx.strokeStyle = '#111827';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#111827';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            for (let i = 0; i <= maxTicks; i++) {
+                const angle = startAngle + (endAngle - startAngle) * (i / maxTicks);
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
+                
+                let lineLength = radius * 0.04;
+                let isMajor = false;
+                
+                if (i % 10 === 0) {
+                    lineLength = radius * 0.09; 
+                    isMajor = true;
+                } else if (i % 5 === 0) {
+                    lineLength = radius * 0.06; 
+                }
+
+                const x1 = cx + radius * cosA;
+                const y1 = cy + radius * sinA;
+                const x2 = cx + (radius - lineLength) * cosA;
+                const y2 = cy + (radius - lineLength) * sinA;
+
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.lineWidth = isMajor ? 3 : 1.5;
+                ctx.strokeStyle = '#111827';
+                ctx.stroke();
+
+                if (isMajor) {
+                    const fontSize = Math.max(12, radius * 0.07);
+                    ctx.font = `bold ${fontSize}px Inter`;
+                    
+                    if (state.mode === 'A') {
+                        // 5A用 (目盛りに近づける)
+                        drawTextAlongArc(cx, cy, radius + radius * 0.10, angle, (i / 10).toString());
+                        // 50mA用 
+                        drawTextAlongArc(cx, cy, radius - radius * 0.18, angle, (i * 1).toString());
+                        // 500mA用 (100刻み)
+                        if (state.showHundredScale) {
+                            drawTextAlongArc(cx, cy, radius - radius * 0.30, angle, (i * 10).toString());
+                        }
+                    } else {
+                        // 3V用 (目盛りに近づける)
+                        drawTextAlongArc(cx, cy, radius + radius * 0.10, angle, (i / 10).toString());
+                        // 15V用 
+                        drawTextAlongArc(cx, cy, radius - radius * 0.18, angle, (i / 2).toString());
+                        // 300V用 (100刻み)
+                        if (state.showHundredScale) {
+                            drawTextAlongArc(cx, cy, radius - radius * 0.30, angle, (i * 10).toString());
+                        }
+                    }
+                }
+            }
+
+            ctx.fillStyle = '#111827';
+            ctx.font = `bold ${Math.max(20, radius * 0.15)}px Inter`;
+            // A/V の文字を少し上に移動して被りを防ぐ
+            ctx.fillText(state.mode === 'A' ? 'A' : 'V', cx, cy - radius * 0.55);
+            
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(cx - 10, cy - radius * 0.45);
+            ctx.lineTo(cx + 10, cy - radius * 0.45);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.setLineDash([4, 2]);
+            ctx.moveTo(cx - 10, cy - radius * 0.41);
+            ctx.lineTo(cx + 10, cy - radius * 0.41);
+            ctx.stroke();
+            ctx.setLineDash([]); 
+        }
+
+        function drawTextAlongArc(cx, cy, textRadius, angle, text) {
+            const x = cx + textRadius * Math.cos(angle);
+            const y = cy + textRadius * Math.sin(angle);
+            ctx.fillText(text, x, y);
+        }
+
+        function drawTerminals(w, h, cx, cy, radius) {
+            // 端子を下部の枠内ギリギリに配置
+            const termY = h * 0.92; 
+            const termRadius = Math.min(w * 0.035, 18);
+            
+            const posX = w * 0.85;
+            drawSingleTerminal(posX, termY, termRadius, '#ef4444', '+');
+            drawCable(posX, termY, termRadius, '#ef4444', w, h, 'right');
+
+            const minusTerminals = state.mode === 'A' ? ['50mA', '500mA', '5A'] : ['300V', '15V', '3V'];
+            // 端子の間隔を調整してカバーとの干渉を避ける
+            const startX = w * 0.12; 
+            const gap = (w * 0.42) / 2; 
+
+            for (let i = 0; i < 3; i++) {
+                const tx = startX + gap * i;
+                const label = minusTerminals[i];
+                const isActive = label === state.terminal;
+                
+                drawSingleTerminal(tx, termY, termRadius, '#111827', label);
+
+                if (isActive) {
+                    drawCable(tx, termY, termRadius, '#1f2937', w, h, 'left');
+                }
+            }
+        }
+
+        function drawSingleTerminal(x, y, r, color, label) {
+            ctx.beginPath();
+            ctx.arc(x, y+2, r, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(0,0,0,0.2)';
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(x, y, r * 0.4, 0, Math.PI * 2);
+            ctx.fillStyle = '#4b5563';
+            ctx.fill();
+
+            ctx.fillStyle = '#4b5563';
+            ctx.font = `bold ${Math.max(10, r * 0.7)}px Inter`;
+            // テキストのベースラインを指定して端子のすぐ上に配置
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillText(label, x, y - r - 6);
+        }
+
+        function drawCable(x, y, r, color, w, h, dir) {
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.bezierCurveTo(x, y + 40, x + (dir==='right'? 20 : -20), h + 20, x + (dir==='right'? 40 : -40), h + 20);
+            ctx.lineWidth = r * 0.8;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.bezierCurveTo(x, y + 40, x + (dir==='right'? 20 : -20), h + 20, x + (dir==='right'? 40 : -40), h + 20);
+            ctx.lineWidth = r * 0.2;
+            ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+            ctx.stroke();
+        }
+
+        function drawNeedle(cx, cy, radius, startAngle, endAngle) {
+            const maxTicks = state.mode === 'A' ? state.ammeterTicks : state.voltmeterTicks;
+            const angle = startAngle + (endAngle - startAngle) * (state.currentNeedlePos / maxTicks);
+            
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(angle);
+            
+            const needleLength = radius * 1.05;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, -3); 
+            ctx.lineTo(needleLength, 0); 
+            ctx.lineTo(0, 3); 
+            ctx.fillStyle = '#ef4444'; 
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.06, 0, Math.PI * 2);
+            ctx.fillStyle = '#111827';
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.arc(0, 0, radius * 0.02, 0, Math.PI * 2);
+            ctx.fillStyle = '#e5e7eb';
+            ctx.fill();
+
+            ctx.restore();
+        }
+        
+        function drawCover(cx, cy, radius) {
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius * 0.25, Math.PI, Math.PI * 2);
+            ctx.fillStyle = '#f9fafb';
+            ctx.fill();
+            ctx.strokeStyle = '#d1d5db';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            const screwRadius = radius * 0.03;
+            ctx.beginPath();
+            ctx.arc(cx - radius * 0.12, cy - radius * 0.08, screwRadius, 0, Math.PI * 2);
+            ctx.arc(cx + radius * 0.12, cy - radius * 0.08, screwRadius, 0, Math.PI * 2);
+            ctx.fillStyle = '#9ca3af';
+            ctx.fill();
+        }
+
+        function animate() {
+            const diff = state.targetNeedlePos - state.currentNeedlePos;
+            if (Math.abs(diff) > 0.001) {
+                // スプリング効果で針を動かす
+                state.currentNeedlePos += diff * 0.1;
+                drawMeter();
+            }
+            state.animationFrameId = requestAnimationFrame(animate);
+        }
+
+        // --- ゲームロジック ---
+        function switchMode(mode) {
+            if (state.mode === mode) return;
+            
+            state.mode = mode;
+            
+            if (mode === 'A') {
+                ui.tabA.classList.replace('bg-gray-100', 'bg-blue-500');
+                ui.tabA.classList.replace('text-gray-500', 'text-white');
+                ui.tabA.classList.add('shadow-md', 'shadow-blue-200');
+                
+                ui.tabV.classList.replace('bg-red-500', 'bg-gray-100');
+                ui.tabV.classList.replace('text-white', 'text-gray-500');
+                ui.tabV.classList.remove('shadow-md', 'shadow-red-200');
+            } else {
+                ui.tabV.classList.replace('bg-gray-100', 'bg-red-500');
+                ui.tabV.classList.replace('text-gray-500', 'text-white');
+                ui.tabV.classList.add('shadow-md', 'shadow-red-200');
+                
+                ui.tabA.classList.replace('bg-blue-500', 'bg-gray-100');
+                ui.tabA.classList.replace('text-white', 'text-gray-500');
+                ui.tabA.classList.remove('shadow-md', 'shadow-blue-200');
+            }
+
+            generateQuestion();
+        }
+
+        function updateDynamicPlaceholder() {
+            if (state.mode === 'A') {
+                if (state.terminal === '5A') ui.input.placeholder = "例: 3.50";
+                else if (state.terminal === '500mA') ui.input.placeholder = "例: 350";
+                else if (state.terminal === '50mA') ui.input.placeholder = "例: 35.0";
+            } else {
+                if (state.terminal === '300V') ui.input.placeholder = "例: 150";
+                else if (state.terminal === '15V') ui.input.placeholder = "例: 7.50";
+                else if (state.terminal === '3V') ui.input.placeholder = "例: 1.50";
+            }
+        }
+
+        function generateQuestion() {
+            state.isAnswered = false;
+            ui.input.value = '';
+            ui.input.disabled = false;
+            ui.submitBtn.style.display = 'flex';
+            ui.skipBtn.style.display = 'flex';
+            ui.feedback.classList.add('hidden');
+            ui.nextBtn.classList.add('hidden');
+            ui.openAiBtn.classList.add('hidden');
+            
+            ui.aiHintArea.classList.add('hidden');
+            ui.getHintBtn.classList.remove('hidden');
+            ui.getHintBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" /></svg> AI先生にヒントをもらう`;
+            ui.getHintBtn.disabled = false;
+
+            ui.input.focus();
+            ui.toggleScaleBtn.checked = false;
+            state.showHundredScale = false;
+
+            const availableTerminals = terminals[state.mode];
+            state.terminal = availableTerminals[Math.floor(Math.random() * availableTerminals.length)];
+            
+            ui.badge.textContent = `接続: ${state.terminal} 端子`;
+            ui.badge.className = `absolute top-4 left-6 text-white text-xs md:text-sm font-bold px-3 py-1 rounded-full shadow-md z-10 transition-colors ${state.mode === 'A' ? 'bg-blue-600' : 'bg-red-600'}`;
+
+            updateDynamicPlaceholder();
+
+            const maxTicks = state.mode === 'A' ? state.ammeterTicks : state.voltmeterTicks;
+            const tick = Math.floor(Math.random() * maxTicks);
+            
+            // 針が止まる位置を「目盛り上(0)」か「目盛りの真ん中(5)」に限定
+            const subTickOptions = [0, 5];
+            const subTick = subTickOptions[Math.floor(Math.random() * subTickOptions.length)];
+            
+            state.value = tick + (subTick / 10);
+            state.currentNeedlePos = 0; 
+            state.targetNeedlePos = state.value;
+
+            calculateCorrectAnswer();
+            drawMeter();
+        }
+
+        function calculateCorrectAnswer() {
+            const pos = state.value; 
+            
+            if (state.mode === 'A') {
+                if (state.terminal === '5A') {
+                    state.correctAnswer = (pos * 0.1).toFixed(2);
+                    state.unit = 'A';
+                } else if (state.terminal === '500mA') {
+                    state.correctAnswer = (pos * 10).toFixed(0); 
+                    state.unit = 'mA';
+                } else if (state.terminal === '50mA') {
+                    state.correctAnswer = (pos * 1).toFixed(1); 
+                    state.unit = 'mA';
+                }
+            } else { 
+                if (state.terminal === '300V') {
+                    state.correctAnswer = (pos * 10).toFixed(0); 
+                    state.unit = 'V';
+                } else if (state.terminal === '15V') {
+                    state.correctAnswer = (pos * 0.5).toFixed(2); 
+                    state.unit = 'V';
+                } else if (state.terminal === '3V') {
+                    state.correctAnswer = (pos * 0.1).toFixed(2); 
+                    state.unit = 'V';
+                }
+            }
+            ui.unit.textContent = state.unit;
+        }
+
+        function getStepAmount() {
+            // +/-ボタンは常に「半目盛り分（0.5区画分）」動かす
+            if (state.mode === 'A') {
+                if (state.terminal === '5A') return 0.05; 
+                if (state.terminal === '500mA') return 5; 
+                if (state.terminal === '50mA') return 0.5; 
+            } else {
+                if (state.terminal === '300V') return 5; 
+                if (state.terminal === '15V') return 0.25; 
+                if (state.terminal === '3V') return 0.05; 
+            }
+            return 0.5;
+        }
+
+        function incrementValue(direction) {
+            if (state.isAnswered) return; 
+
+            let currentVal = parseFloat(normalizeInput(ui.input.value));
+            if (isNaN(currentVal)) currentVal = 0;
+
+            const step = getStepAmount();
+            let newVal = currentVal + (direction * step);
+            if (newVal < 0) newVal = 0;
+
+            let decimals = 0;
+            if (state.mode === 'A') {
+                if (state.terminal === '5A') decimals = 2;
+                else if (state.terminal === '500mA') decimals = 0;
+                else if (state.terminal === '50mA') decimals = 1;
+            } else {
+                if (state.terminal === '300V') decimals = 0;
+                else if (state.terminal === '15V') decimals = 2;
+                else if (state.terminal === '3V') decimals = 2;
+            }
+
+            ui.input.value = newVal.toFixed(decimals);
+        }
+
+        function normalizeInput(str) {
+            return str.replace(/[０-９]/g, function(s) {
+                return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+            }).replace(/,/g, '.').trim();
+        }
+
+        function checkAnswer() {
+            const userInputRaw = ui.input.value;
+            if (userInputRaw === "") return;
+
+            const userInput = normalizeInput(userInputRaw);
+            const numInput = parseFloat(userInput);
+            
+            // 安全装置：数字以外が入力された場合はエラーを揺れで通知
+            if (isNaN(numInput)) {
+                ui.input.classList.add('animate-shake', 'border-red-500', 'bg-red-50');
+                setTimeout(() => {
+                    ui.input.classList.remove('animate-shake', 'border-red-500', 'bg-red-50');
+                }, 400);
+                return;
+            }
+
+            const isCorrect = (userInput === state.correctAnswer);
+
+            state.isAnswered = true;
+            ui.input.disabled = true;
+            ui.submitBtn.style.display = 'none';
+            ui.skipBtn.style.display = 'none';
+            ui.feedback.classList.remove('hidden');
+            
+            ui.feedback.classList.remove('animate-pop-in');
+            void ui.feedback.offsetWidth; 
+            ui.feedback.classList.add('animate-pop-in');
+
+            if (isCorrect) {
+                ui.feedback.className = `rounded-3xl p-6 shadow-xl border-2 border-green-500 bg-green-50 animate-pop-in`;
+                ui.feedbackIcon.className = `w-14 h-14 rounded-full flex items-center justify-center text-3xl shadow-inner bg-green-500 text-white shrink-0`;
+                ui.feedbackIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>`;
+                ui.feedbackTitle.textContent = "大正解！バッチリです！";
+                ui.feedbackTitle.className = "text-2xl font-bold text-green-700";
+            } else {
+                ui.feedback.className = `rounded-3xl p-6 shadow-xl border-2 border-red-500 bg-red-50 animate-pop-in animate-shake`;
+                ui.feedbackIcon.className = `w-14 h-14 rounded-full flex items-center justify-center text-3xl shadow-inner bg-red-500 text-white shrink-0`;
+                ui.feedbackIcon.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12" /></svg>`;
+                ui.feedbackTitle.textContent = "おしい！もう一度確認しよう";
+                ui.feedbackTitle.className = "text-2xl font-bold text-red-700";
+                
+                if (numInput === parseFloat(state.correctAnswer)) {
+                    ui.feedbackTitle.textContent = "値は合ってるけど...惜しい！";
+                }
+            }
+
+            generateExplanation(isCorrect, userInput);
+            
+            ui.correctAnswerDisplay.innerHTML = `<span class="text-gray-500 text-sm">正解は...</span> <span class="text-2xl text-blue-600">${state.correctAnswer}</span> ${state.unit}`;
+            ui.nextBtn.classList.remove('hidden');
+            
+            ui.openAiBtn.classList.remove('hidden');
+            ui.getHintBtn.classList.add('hidden'); 
+        }
+
+        function generateExplanation(isCorrect, userInput) {
+            let scaleRange = "";
+            let minScale = "";
+            let readDigit = "";
+            
+            if (state.mode === 'A') {
+                if (state.terminal === '5A') {
+                    scaleRange = "0〜5"; minScale = "0.1A"; readDigit = "小数第2位";
+                } else if (state.terminal === '500mA') {
+                    scaleRange = "0〜500"; minScale = "10mA"; readDigit = "1の位";
+                } else if (state.terminal === '50mA') {
+                    scaleRange = "0〜50"; minScale = "1mA"; readDigit = "小数第1位";
+                }
+            } else {
+                if (state.terminal === '300V') {
+                    scaleRange = "0〜300"; minScale = "10V"; readDigit = "1の位";
+                } else if (state.terminal === '15V') {
+                    scaleRange = "0〜15"; minScale = "0.5V"; readDigit = "小数第2位";
+                } else if (state.terminal === '3V') {
+                    scaleRange = "0〜3"; minScale = "0.1V"; readDigit = "小数第2位";
+                }
+            }
+
+            let text = `メーターの下の線を見ると、<b>${state.terminal}のマイナス端子</b>につながっていますね。なので、文字盤の <b>${scaleRange} の目盛り</b> を読みます。<br><br>`;
+            text += `この目盛りの最小1目盛りは <b>${minScale}</b> です。<br>`;
+            text += `目分量でその <b>1/10まで読む</b> ため、答えは <b>${readDigit}</b> まで書く必要があります。`;
+
+            if (!isCorrect && parseFloat(userInput) === parseFloat(state.correctAnswer)) {
+                text += `<br><br><span class="text-red-600 font-bold">⚠️注意：</span>針が目盛りの線の上にピッタリ止まっている場合でも、必ず「1/10の位」まで 0 を補って答えましょう！`;
+            }
+
+            ui.feedbackText.innerHTML = text;
+        }
+
+        function openAiModal() {
+            ui.aiModal.classList.remove('hidden');
+            setTimeout(() => {
+                ui.aiModal.classList.remove('opacity-0');
+                ui.aiModalContent.classList.remove('scale-95');
+            }, 10);
+            ui.aiInput.focus();
+
+            if (aiChatHistory.length === 0) {
+                aiChatHistory = [];
+            }
+        }
+
+        function closeAiModal() {
+            ui.aiModal.classList.add('opacity-0');
+            ui.aiModalContent.classList.add('scale-95');
+            setTimeout(() => {
+                ui.aiModal.classList.add('hidden');
+            }, 300); 
+        }
+
+        async function handleAiSubmit(e) {
+            e.preventDefault();
+            const userText = ui.aiInput.value.trim();
+            if (!userText) return;
+
+            appendMessage(userText, 'user');
+            ui.aiInput.value = '';
+            ui.aiInput.disabled = true;
+            ui.aiSendBtn.disabled = true;
+            ui.aiLoading.classList.remove('hidden');
+            
+            // 安全装置: APIキーが未設定の場合
+            if (!GEMINI_API_KEY) {
+                setTimeout(() => {
+                    appendMessage("ごめんなさい！先生のAIシステム（APIキー）がまだ設定されていないみたいです。管理者の人（デプロイした人）にコードの中のAPIキーを設定してもらってね！", 'ai');
+                    ui.aiInput.disabled = false;
+                    ui.aiSendBtn.disabled = false;
+                    ui.aiLoading.classList.add('hidden');
+                }, 1000);
+                return;
+            }
+
+            let meterName = state.mode === 'A' ? '電流計' : '電圧計';
+            let contextStr = `【システム情報：生徒は現在、${meterName}の「${state.terminal}」端子の問題を解いています。正解は「${state.correctAnswer} ${state.unit}」です。】\n\n生徒からの発言: ${userText}`;
+
+            aiChatHistory.push({
+                role: 'user',
+                parts: [{ text: contextStr }]
+            });
+
+            try {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`;
+                
+                const payload = {
+                    contents: aiChatHistory,
+                    systemInstruction: {
+                        parts: [{ text: systemPrompt }]
+                    }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+                const result = await response.json();
+                const aiResponseText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (aiResponseText) {
+                    aiChatHistory.push({
+                        role: 'model',
+                        parts: [{ text: aiResponseText }]
+                    });
+                    appendMessage(aiResponseText, 'ai');
+                } else {
+                    appendMessage("ごめんね、先生ちょっと考え込んでしまったみたい。もう一度質問してくれる？", 'ai');
+                }
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                appendMessage("通信エラーが発生しちゃったみたい。インターネットの接続を確認して、もう一度試してね。", 'ai');
+                aiChatHistory.pop();
+            } finally {
+                ui.aiInput.disabled = false;
+                ui.aiSendBtn.disabled = false;
+                ui.aiLoading.classList.add('hidden');
+                ui.aiInput.focus();
+            }
+        }
+
+        function appendMessage(text, sender) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = "flex items-start gap-3 animate-pop-in";
+            
+            if (sender === 'user') {
+                msgDiv.classList.add('flex-row-reverse');
+                msgDiv.innerHTML = `
+                    <div class="w-8 h-8 rounded-full bg-blue-100 flex-shrink-0 flex items-center justify-center text-sm shadow-sm">👤</div>
+                    <div class="bg-blue-600 text-white p-3 rounded-2xl rounded-tr-sm shadow-sm max-w-[85%] text-sm leading-relaxed">
+                        ${escapeHTML(text)}
+                    </div>
+                `;
+            } else {
+                const formattedText = escapeHTML(text)
+                    .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-purple-700">$1</strong>')
+                    .replace(/\*(.*?)\*/g, '<span class="bg-purple-100 px-1 rounded">$1</span>')
+                    .replace(/\n/g, '<br>');
+
+                msgDiv.innerHTML = `
+                    <div class="w-8 h-8 rounded-full bg-purple-200 flex-shrink-0 flex items-center justify-center text-sm shadow-sm border border-purple-300">🤖</div>
+                    <div class="bg-white border border-purple-100 text-gray-800 p-3 rounded-2xl rounded-tl-sm shadow-sm max-w-[85%] text-sm leading-relaxed">
+                        ${formattedText}
+                    </div>
+                `;
+            }
+            
+            ui.chatHistory.appendChild(msgDiv);
+            ui.chatHistory.scrollTo({ top: ui.chatHistory.scrollHeight, behavior: 'smooth' });
+        }
+
+        async function getAiHint() {
+            ui.getHintBtn.disabled = true;
+            ui.getHintBtn.innerHTML = `<span class="animate-spin h-5 w-5 mr-2 border-2 border-purple-600 border-t-transparent rounded-full"></span> 先生が考え中...`;
+            
+            // 安全装置: APIキーが未設定の場合
+            if (!GEMINI_API_KEY) {
+                setTimeout(() => {
+                    ui.aiHintText.innerHTML = "ごめんなさい！先生のAIシステム（APIキー）が未設定のため、今はヒントが出せません。";
+                    ui.aiHintArea.classList.remove('hidden');
+                    ui.getHintBtn.classList.add('hidden');
+                }, 800);
+                return;
+            }
+
+            let meterName = state.mode === 'A' ? '電流計' : '電圧計';
+            let prompt = `あなたは中学校の理科の先生です。生徒は現在、${meterName}の「${state.terminal}」端子の読み取り問題に挑戦しています。
+            現在、針が指している正解は「${state.correctAnswer} ${state.unit}」です。
+            
+            【重要ルール】
+            絶対に答えの数値（${state.correctAnswer}）は言わないでください。
+            
+            生徒が自分で正解を導き出せるように、
+            「どの数字の列（目盛り）を見ればいいか」や「最小1目盛りがいくつか」などについて、
+            短く（1〜2文程度で）優しくヒントを出してください。中学生向けに親しみやすい口調でお願いします。`;
+
+            try {
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`;
+                
+                const payload = {
+                    contents: [{role: "user", parts: [{text: prompt}]}],
+                    systemInstruction: { parts: [{ text: systemPrompt }] }
+                };
+
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) throw new Error("API Request Failed");
+
+                const result = await response.json();
+                const hintText = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+                if (hintText) {
+                    const formattedHint = escapeHTML(hintText)
+                        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold text-purple-700">$1</strong>')
+                        .replace(/\n/g, '<br>');
+                    
+                    ui.aiHintText.innerHTML = formattedHint;
+                    ui.aiHintArea.classList.remove('hidden');
+                    ui.getHintBtn.classList.add('hidden'); 
+                }
+            } catch (error) {
+                console.error("Gemini API Error:", error);
+                ui.getHintBtn.innerHTML = "ヒントの取得に失敗しました。もう一度試す";
+                ui.getHintBtn.disabled = false;
+            }
+        }
+
+        function escapeHTML(str) {
+            return str.replace(/[&<>'"]/g, 
+                tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+            );
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
